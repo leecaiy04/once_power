@@ -1,0 +1,53 @@
+name: Build Linux App
+
+# 触发条件：当你手动点击运行，或者推送到 main 分支时触发
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 拉取代码
+      - uses: actions/checkout@v4
+
+      # 2. 安装 Linux 编译依赖 (Flutter 在 Linux 下编译所需的库)
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+
+      # 3. 安装 Flutter 环境
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          
+      # 4. 确保 Linux 支持已开启 (防止原项目没有 linux 目录)
+      - name: Enable Linux Configuration
+        run: |
+          flutter config --enable-linux-desktop
+          flutter create --platforms=linux .
+
+      # 5. 拉取项目依赖
+      - name: Get Dependencies
+        run: flutter pub get
+
+      # 6. 开始构建 (Release 模式)
+      - name: Build Linux App
+        run: flutter build linux --release
+
+      # 7. 打包成压缩文件 (方便下载)
+      - name: Compress Bundle
+        run: |
+          cd build/linux/x64/release/bundle
+          tar -czvf once_power_linux.tar.gz *
+
+      # 8. 上传构建产物 (让你能下载到)
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: once_power_linux_app
+          path: build/linux/x64/release/bundle/once_power_linux.tar.gz
