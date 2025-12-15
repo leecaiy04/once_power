@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 修复点：添加了 libayatana-appindicator3-dev
+      # 1. 安装依赖 (包含打包deb所需的工具)
       - name: Install Linux Dependencies
         run: |
           sudo apt-get update
@@ -33,13 +33,67 @@ jobs:
       - name: Build Linux App
         run: flutter build linux --release
 
-      - name: Compress Bundle
+      # ---------------------------------------------------------
+      # 新增步骤：制作 DEB 安装包
+      # ---------------------------------------------------------
+      - name: Package as Deb
         run: |
-          cd build/linux/x64/release/bundle
-          tar -czvf once_power_linux.tar.gz *
+          # 1. 设置变量
+          APP_NAME="once-power"
+          VERSION="1.0.0"
+          ARCH="amd64"
+          # 创建 deb 包所需的目录结构
+          mkdir -p deb_package/DEBIAN
+          mkdir -p deb_package/usr/local/bin
+          mkdir -p deb_package/opt/$APP_NAME
+          mkdir -p deb_package/usr/share/applications
+          mkdir -p deb_package/usr/share/icons/hicolor/512x512/apps
 
+          # 2. 复制 Flutter 构建产物到 /opt 目录
+          cp -r build/linux/x64/release/bundle/* deb_package/opt/$APP_NAME/
+
+          # 3. 创建启动脚本并链接到 /usr/local/bin (这样用户在终端输入 once-power 也能运行)
+          echo "#!/bin/bash" > deb_package/usr/local/bin/$APP_NAME
+          echo "/opt/$APP_NAME/once_power" >> deb_package/usr/local/bin/$APP_NAME
+          chmod +x deb_package/usr/local/bin/$APP_NAME
+
+          # 4. 创建桌面图标文件 (.desktop) - 这样安装后开始菜单里会有图标
+          cat > deb_package/usr/share/applications/$APP_NAME.desktop <<EOF
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=Once Power
+          Comment=Batch file rename and management tool
+          Exec=/opt/$APP_NAME/once_power
+          Icon=$APP_NAME
+          Terminal=false
+          Categories=Utility;
+          EOF
+
+          # 5. 复制图标 (假设项目里有 icon，如果没有这步会忽略)
+          # 注意：这里需要你项目里有个图标，如果没有，可以暂时跳过或者用默认的
+          # cp assets/icon.png deb_package/usr/share/icons/hicolor/512x512/apps/$APP_NAME.png || true
+
+          # 6. 创建 control 文件 (deb 的核心描述文件)
+          cat > deb_package/DEBIAN/control <<EOF
+          Package: $APP_NAME
+          Version: $VERSION
+          Architecture: $ARCH
+          Maintainer: You <your@email.com>
+          Description: Once Power - File batch processing tool
+           A Flutter based tool for batch file renaming and management.
+          EOF
+
+          # 7. 执行打包命令
+          dpkg-deb --build deb_package ${APP_NAME}_${VERSION}_${ARCH}.deb
+
+      # ---------------------------------------------------------
+
+      # 上传构建产物 (这次你会得到一个 tar.gz 和一个 .deb)
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: once_power_linux_app
-          path: build/linux/x64/release/bundle/once_power_linux.tar.gz
+          name: linux_release_files
+          path: |
+            *.deb
+            build/linux/x64/release/bundle/
