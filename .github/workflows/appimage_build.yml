@@ -1,84 +1,105 @@
-name: Build AppImage
+name: Build Once-Power AppImage
 
 on:
   push:
-    # 当推送到 release 分支或创建 tag 时触发
-    branches: [ release ]
+    # 仅在推送到 main 分支或创建 Tag 时运行
+    branches: [ main ]
     tags: [ 'v*.*.*' ]
-  pull_request:
-    branches: [ release ]
+  workflow_dispatch: # 允许手动触发
 
 jobs:
   build_appimage:
-    # 关键：使用较新的 Runner，例如 Ubuntu 22.04，以获取新的 GLIBC/GLIBCXX
+    # 解决 GLIBC 版本依赖问题的关键：使用较新的 Ubuntu 系统
     runs-on: ubuntu-22.04 
+
+    env:
+      APP_NAME: OncePower             # 应用显示名称
+      EXECUTABLE_NAME: once-power-main # 【已修改】主可执行文件的文件名
+      APPDIR: ${{ runner.temp }}/AppDir
 
     steps:
       - name: ⬇️ Checkout 仓库代码
         uses: actions/checkout@v4
-        
-      # --- 假设您的应用程序需要先编译（如果程序在仓库中是源码） ---
-      # 如果您的程序已经预编译好，并且在仓库中，可以跳过编译步骤。
-      # - name: 🛠️ 安装构建依赖
-      #   run: |
-      #     sudo apt-get update
-      #     sudo apt-get install -y build-essential cmake pkg-config
-      # - name: ⚙️ 编译程序
-      #   run: |
-      #     # 【请修改】这里替换为您的实际编译命令，例如：
-      #     # mkdir build && cd build
-      #     # cmake ..
-      #     # make -j$(nproc)
-      
-      # ⚠️ 关键步骤：设置 AppDir
-      # 假设您已经有一个 AppDir 目录，或者您需要手动复制文件到 AppDir
-      - name: 📂 设置 AppDir 目录结构
-        run: |
-          APP_NAME="once-power" # 【请修改】您的应用名称
-          APPDIR="${{ runner.temp }}/AppDir"
-          mkdir -p "$APPDIR/usr/bin"
-          mkdir -p "$APPDIR/usr/lib"
-          
-          # 【请修改】将您的主可执行文件复制到 usr/bin
-          # 假设主程序是 /path/to/once-power-executable
-          # cp /path/to/once-power-executable "$APPDIR/usr/bin/$APP_NAME"
 
-          # 【请修改】将您的 libfvp_plugin.so 和其他运行时库复制到 usr/lib
-          # 注意：AppImage 会自动处理大部分标准库，但最好把应用特定的库放进去
-          # cp -r /data/opt/once-power/lib/* "$APPDIR/usr/lib/"
+      # --- 编译和设置 AppDir 结构 ---
+      
+      - name: 🛠️ 编译和设置 AppDir 结构
+        run: |
+          # 1. 安装必要的构建依赖 (此处假设您的应用依赖 libgtk-3, build-essential)
+          echo "安装构建依赖..."
+          sudo apt-get update
+          # 添加所有您需要的依赖，例如：
+          sudo apt-get install -y build-essential cmake pkg-config libgtk-3-dev
           
-          # 创建 .desktop 文件和图标 (AppImage 必需)
-          cat > "$APPDIR/$APP_NAME.desktop" << EOF
+          # 2. 【已修改】执行您的编译和构建命令
+          echo "执行编译..."
+          
+          # 假设使用 CMake 进行编译
+          # 请根据您的实际构建流程调整或取消注释以下命令
+          # mkdir build-release
+          # cmake -S . -B build-release 
+          # make -C build-release -j$(nproc)
+          
+          # 3. --- AppDir 文件准备 (核心步骤) ---
+          
+          echo "创建 AppDir 目录: $APPDIR"
+          mkdir -p $APPDIR/usr/bin
+          mkdir -p $APPDIR/usr/lib
+          mkdir -p $APPDIR/usr/share/icons/hicolor/256x256/apps
+          
+          # 4. 【已修改】复制主可执行文件
+          # 假设主可执行文件在 ./build/bin/
+          echo "复制主可执行文件..."
+          cp ./build/bin/${{ env.EXECUTABLE_NAME }} $APPDIR/usr/bin/${{ env.EXECUTABLE_NAME }} 
+          
+          # 5. 【已修改】复制所有应用专有库 (.so 文件)，包括 libfvp_plugin.so
+          # 假设库文件在 ./build/lib/ 目录下
+          echo "复制应用库文件 (如 libfvp_plugin.so)..."
+          cp ./build/lib/libfvp_plugin.so $APPDIR/usr/lib/
+          cp ./build/lib/libmdk.so.0 $APPDIR/usr/lib/ # 复制其他定制库
+          
+          # 6. 创建 .desktop 文件 (AppImage 必需)
+          echo "创建 .desktop 文件..."
+          cat > "$APPDIR/${{ env.APP_NAME }}.desktop" << EOF
           [Desktop Entry]
-          Name=$APP_NAME
-          Exec=$APP_NAME
-          Icon=$APP_NAME # 【请修改】请确保您的图标文件 (例如 .png) 在 AppDir/usr/share/icons/hicolor/
+          Name=${{ env.APP_NAME }}
+          Exec=${{ env.EXECUTABLE_NAME }}
+          Icon=${{ env.APP_NAME }}
           Type=Application
           Categories=Utility;
           EOF
           
-      # --- 使用 linuxdeploy 打包 ---
-      - name: ⬇️ 下载 linuxdeploy 工具
+          # 7. 【已修改】复制图标文件 (假设图标名为 icon.png，位于 resources/)
+          echo "复制图标文件..."
+          cp ./resources/icon.png $APPDIR/usr/share/icons/hicolor/256x256/apps/${{ env.APP_NAME }}.png
+
+      # --- AppImage 打包步骤：使用 linuxdeploy 自动捆绑系统依赖 ---
+      
+      - name: ⬇️ 下载 linuxdeploy 工具和 AppImage 插件
         run: |
           wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
           chmod +x linuxdeploy*.AppImage
-          
-      - name: ⚙️ 执行 AppImage 打包
+
+      - name: ⚙️ 执行 AppImage 打包 (捆绑依赖库)
         run: |
+          echo "开始打包 AppImage..."
           ./linuxdeploy-x86_64.AppImage \
-            --appdir "${{ runner.temp }}/AppDir" \
-            --executable "${{ runner.temp }}/AppDir/usr/bin/once-power" \
+            --appdir "$APPDIR" \
+            --executable "$APPDIR/usr/bin/${{ env.EXECUTABLE_NAME }}" \
+            --desktop-file "$APPDIR/${{ env.APP_NAME }}.desktop" \
             --output appimage
-            
-      - name: 📤 上传 AppImage 文件到 Artifacts
+          
+          # 重命名文件以便于识别
+          mv *.AppImage ${{ env.APP_NAME }}-${{ github.sha }}.AppImage
+
+      - name: 📤 上传生成的 AppImage 文件到 Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-AppImage
+          name: AppImage-Build-Artifact
           path: '*.AppImage'
-          
-      # 可选：发布到 GitHub Release
-      - name: 🚀 发布到 GitHub Release (如果 tag 存在)
+
+      - name: 🚀 发布 AppImage 到 GitHub Release (如果使用 Tag 触发)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
