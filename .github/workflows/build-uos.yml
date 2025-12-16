@@ -1,0 +1,95 @@
+name: Build UOS Deb Package
+
+on:
+  workflow_dispatch: # 允许手动点击按钮触发构建
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04 # 使用 20.04 以保证 glibc 兼容性更好，适配 UOS
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Linux Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+    
+    - name: Get Dependencies
+      run: flutter pub get
+
+    - name: Build Linux Release
+      run: flutter build linux --release
+
+    - name: Create Deb Package Structure for UOS
+      run: |
+        # 定义版本号和包名
+        APP_NAME="once_power"
+        PKG_NAME="com.ilgnefz.oncepower"
+        VERSION=$(grep 'version:' pubspec.yaml | sed 's/version: //')
+        echo "Detected Version: $VERSION"
+        
+        # 创建 UOS 规范的目录结构
+        mkdir -p package/DEBIAN
+        mkdir -p package/opt/apps/$PKG_NAME/files
+        mkdir -p package/usr/share/applications
+        mkdir -p package/usr/share/icons/hicolor/512x512/apps
+        
+        # 复制编译产物到 /opt/apps/...
+        cp -r build/linux/x64/release/bundle/* package/opt/apps/$PKG_NAME/files/
+        
+        # 处理图标 (尝试寻找项目中的图标)
+        # 注意：这里假设项目中有 logo，如果没有会使用空文件避免报错，建议后续手动替换
+        if [ -f "assets/images/logo.png" ]; then
+          cp assets/images/logo.png package/usr/share/icons/hicolor/512x512/apps/$PKG_NAME.png
+        elif [ -f "assets/logo.png" ]; then
+          cp assets/logo.png package/usr/share/icons/hicolor/512x512/apps/$PKG_NAME.png
+        else
+          echo "Warning: No icon found, creating placeholder"
+          touch package/usr/share/icons/hicolor/512x512/apps/$PKG_NAME.png
+        fi
+
+        # 创建 desktop 文件
+        cat <<EOF > package/usr/share/applications/$PKG_NAME.desktop
+        [Desktop Entry]
+        Version=1.0
+        Type=Application
+        Name=OncePower
+        Name[zh_CN]=OncePower
+        Comment=Batch file renaming tool
+        Exec=/opt/apps/$PKG_NAME/files/$APP_NAME
+        Icon=$PKG_NAME
+        Terminal=false
+        Categories=Utility;
+        EOF
+
+        # 创建 control 文件
+        cat <<EOF > package/DEBIAN/control
+        Package: $PKG_NAME
+        Version: $VERSION
+        Section: utils
+        Priority: optional
+        Architecture: amd64
+        Depends: libgtk-3-0, libc6, libstdc++6
+        Maintainer: GithubAction
+        Description: Batch renaming and managing files tool.
+        EOF
+        
+        # 修改权限
+        chmod 755 -R package/DEBIAN
+
+    - name: Build Deb File
+      run: |
+        VERSION=$(grep 'version:' pubspec.yaml | sed 's/version: //')
+        dpkg-deb --build package once_power_${VERSION}_amd64.deb
+
+    - name: Upload Deb Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: once_power_uos_amd64
+        path: once_power_*.deb
