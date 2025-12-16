@@ -1,56 +1,68 @@
-name: Build UOS Deb Package
+name: Build & Release for UOS
 
 on:
-  workflow_dispatch: # 允许手动点击按钮触发构建
+  workflow_dispatch: # 手动触发
+
+permissions:
+  contents: write # 必须赋予写权限，否则无法创建 Release
 
 jobs:
+  # 第一步：在老旧系统环境下编译（为了兼容 UOS）
   build:
-    runs-on: ubuntu-20.04 # 使用 20.04 以保证 glibc 兼容性更好，适配 UOS
+    runs-on: ubuntu-latest
+    container:
+      image: debian:buster # 使用 Debian 10 保证 glibc 版本够老
     
     steps:
+    - name: Install Build Dependencies
+      run: |
+        apt-get update
+        apt-get install -y git curl unzip xz-utils zip libglu1-mesa clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-8-dev
+        
+    - name: Mark Git Directory Safe
+      run: git config --global --add safe.directory '*'
+
     - uses: actions/checkout@v4
 
-    - name: Install Linux Dependencies
+    - name: Install Flutter Manually
       run: |
-        sudo apt-get update
-        sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+        git clone https://github.com/flutter/flutter.git -b stable /opt/flutter
+        echo "/opt/flutter/bin" >> $GITHUB_PATH
 
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        channel: 'stable'
-    
-    - name: Get Dependencies
-      run: flutter pub get
+    - name: Fix Permissions & Get Packages
+      run: |
+        git config --global --add safe.directory /opt/flutter
+        flutter config --no-analytics
+        flutter pub get
 
     - name: Build Linux Release
       run: flutter build linux --release
 
-    - name: Create Deb Package Structure for UOS
+    - name: Package for UOS
       run: |
-        # 定义版本号和包名
         APP_NAME="once_power"
         PKG_NAME="com.ilgnefz.oncepower"
         VERSION=$(grep 'version:' pubspec.yaml | sed 's/version: //')
-        echo "Detected Version: $VERSION"
         
-        # 创建 UOS 规范的目录结构
+        # 创建目录结构
         mkdir -p package/DEBIAN
         mkdir -p package/opt/apps/$PKG_NAME/files
         mkdir -p package/usr/share/applications
         mkdir -p package/usr/share/icons/hicolor/512x512/apps
+
+        # 查找并复制编译产物
+        BUILD_DIR=$(find build -type f -name "$APP_NAME" | grep "release/bundle" | xargs dirname)
+        cp -r $BUILD_DIR/* package/opt/apps/$PKG_NAME/files/
         
-        # 复制编译产物到 /opt/apps/...
-        cp -r build/linux/x64/release/bundle/* package/opt/apps/$PKG_NAME/files/
-        
-        # 处理图标 (尝试寻找项目中的图标)
-        # 注意：这里假设项目中有 logo，如果没有会使用空文件避免报错，建议后续手动替换
+        # ⚠️ 赋予执行权限
+        chmod +x package/opt/apps/$PKG_NAME/files/$APP_NAME
+
+        # 处理图标
         if [ -f "assets/images/logo.png" ]; then
           cp assets/images/logo.png package/usr/share/icons/hicolor/512x512/apps/$PKG_NAME.png
         elif [ -f "assets/logo.png" ]; then
           cp assets/logo.png package/usr/share/icons/hicolor/512x512/apps/$PKG_NAME.png
         else
-          echo "Warning: No icon found, creating placeholder"
           touch package/usr/share/icons/hicolor/512x512/apps/$PKG_NAME.png
         fi
 
@@ -75,21 +87,54 @@ jobs:
         Section: utils
         Priority: optional
         Architecture: amd64
-        Depends: libgtk-3-0, libc6, libstdc++6
+        Depends: libgtk-3-0, libc6, libstdc++6, libmpv1
         Maintainer: GithubAction
-        Description: Batch renaming and managing files tool.
+        Description: Batch renaming tool for UOS.
         EOF
         
-        # 修改权限
         chmod 755 -R package/DEBIAN
 
     - name: Build Deb File
       run: |
         VERSION=$(grep 'version:' pubspec.yaml | sed 's/version: //')
-        dpkg-deb --build package once_power_${VERSION}_amd64.deb
+        # 构建 deb
+        dpkg-deb --build package once_power_${VERSION}_uos_legacy.deb
+        # 将版本号写入文件，传递给下一个任务
+        echo "$VERSION" > version.txt
 
-    - name: Upload Deb Artifact
+    - name: Upload Artifact for Release
       uses: actions/upload-artifact@v4
       with:
-        name: once_power_uos_amd64
-        path: once_power_*.deb
+        name: build-artifacts
+        path: |
+          *.deb
+          version.txt
+
+  # 第二步：发布到 GitHub Releases 页面
+  release:
+    needs: build # 等待构建完成
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Download Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: build-artifacts
+
+    - name: Read Version
+      id: get_version
+      run: |
+        ver=$(cat version.txt)
+        echo "VERSION=$ver" >> $GITHUB_ENV
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ env.VERSION }}
+        name: Release v${{ env.VERSION }} (UOS Support)
+        draft: false
+        prerelease: false
+        files: |
+          *.deb
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
