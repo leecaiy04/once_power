@@ -1,0 +1,88 @@
+name: Build AppImage
+
+on:
+  push:
+    # 当推送到 release 分支或创建 tag 时触发
+    branches: [ release ]
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ release ]
+
+jobs:
+  build_appimage:
+    # 关键：使用较新的 Runner，例如 Ubuntu 22.04，以获取新的 GLIBC/GLIBCXX
+    runs-on: ubuntu-22.04 
+
+    steps:
+      - name: ⬇️ Checkout 仓库代码
+        uses: actions/checkout@v4
+        
+      # --- 假设您的应用程序需要先编译（如果程序在仓库中是源码） ---
+      # 如果您的程序已经预编译好，并且在仓库中，可以跳过编译步骤。
+      # - name: 🛠️ 安装构建依赖
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y build-essential cmake pkg-config
+      # - name: ⚙️ 编译程序
+      #   run: |
+      #     # 【请修改】这里替换为您的实际编译命令，例如：
+      #     # mkdir build && cd build
+      #     # cmake ..
+      #     # make -j$(nproc)
+      
+      # ⚠️ 关键步骤：设置 AppDir
+      # 假设您已经有一个 AppDir 目录，或者您需要手动复制文件到 AppDir
+      - name: 📂 设置 AppDir 目录结构
+        run: |
+          APP_NAME="once-power" # 【请修改】您的应用名称
+          APPDIR="${{ runner.temp }}/AppDir"
+          mkdir -p "$APPDIR/usr/bin"
+          mkdir -p "$APPDIR/usr/lib"
+          
+          # 【请修改】将您的主可执行文件复制到 usr/bin
+          # 假设主程序是 /path/to/once-power-executable
+          # cp /path/to/once-power-executable "$APPDIR/usr/bin/$APP_NAME"
+
+          # 【请修改】将您的 libfvp_plugin.so 和其他运行时库复制到 usr/lib
+          # 注意：AppImage 会自动处理大部分标准库，但最好把应用特定的库放进去
+          # cp -r /data/opt/once-power/lib/* "$APPDIR/usr/lib/"
+          
+          # 创建 .desktop 文件和图标 (AppImage 必需)
+          cat > "$APPDIR/$APP_NAME.desktop" << EOF
+          [Desktop Entry]
+          Name=$APP_NAME
+          Exec=$APP_NAME
+          Icon=$APP_NAME # 【请修改】请确保您的图标文件 (例如 .png) 在 AppDir/usr/share/icons/hicolor/
+          Type=Application
+          Categories=Utility;
+          EOF
+          
+      # --- 使用 linuxdeploy 打包 ---
+      - name: ⬇️ 下载 linuxdeploy 工具
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+          
+      - name: ⚙️ 执行 AppImage 打包
+        run: |
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir "${{ runner.temp }}/AppDir" \
+            --executable "${{ runner.temp }}/AppDir/usr/bin/once-power" \
+            --output appimage
+            
+      - name: 📤 上传 AppImage 文件到 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-AppImage
+          path: '*.AppImage'
+          
+      # 可选：发布到 GitHub Release
+      - name: 🚀 发布到 GitHub Release (如果 tag 存在)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: '*.AppImage'
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
