@@ -1,0 +1,93 @@
+name: Build AppImage
+
+on:
+  push:
+    # 仅在推送到 main 或 master 分支时运行，或者在创建 Release Tag 时运行
+    branches: [ main, master ]
+    tags: [ 'v*.*.*' ]
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  build_appimage:
+    # 关键：使用 Ubuntu 22.04 作为构建环境，它包含较新的 GLIBC (2.35+)
+    runs-on: ubuntu-22.04 
+
+    env:
+      APP_NAME: once-power # 【必须修改】您的应用的主名称
+      EXECUTABLE_NAME: once-power-main # 【必须修改】您的主可执行文件名称
+      APPDIR: ${{ runner.temp }}/AppDir
+
+    steps:
+      - name: ⬇️ Checkout 仓库代码
+        uses: actions/checkout@v4
+
+      # --- 编译/准备应用程序的二进制文件 ---
+      # **注意:** 这一步是假设您需要从源码编译。如果您的二进制文件已经存在于仓库中，请修改此步骤。
+      - name: 🛠️ 编译和安装应用到 AppDir
+        run: |
+          # 1. 安装必要的构建依赖 (根据您的项目调整)
+          sudo apt-get update
+          # sudo apt-get install -y cmake build-essential libgtk-3-dev ...
+
+          # 2. 【必须修改】执行您的编译和构建命令
+          # 假设您的项目是用 CMake 构建的，并将文件安装到 $APPDIR
+          # cmake -B build -DCMAKE_INSTALL_PREFIX=/usr
+          # cmake --build build --target install --prefix $APPDIR
+
+          # ⚠️ 示例：如果您的二进制文件和库文件已经存在于一个路径中 (例如：/data/opt/once-power)
+          # 您需要将这些文件从仓库的某个位置复制过来。
+          
+          # **重要：** 必须确保将核心可执行文件和所有 **once-power 自己的库** 复制到 AppDir
+          # 示例：将您的所有文件 (包括 libfvp_plugin.so) 复制到 /usr/lib 和 /usr/bin 下
+          mkdir -p $APPDIR/usr/bin $APPDIR/usr/lib $APPDIR/usr/share/icons/hicolor/256x256/apps
+          
+          # 【假设】您的主可执行文件在仓库的某个位置，将其复制到 AppDir/usr/bin
+          # cp path/to/your/main_executable $APPDIR/usr/bin/${{ env.EXECUTABLE_NAME }} 
+
+          # 【假设】您的 libfvp_plugin.so 和 libmdk.so.0 等在仓库的某个位置，将其复制到 AppDir/usr/lib
+          # cp path/to/your/libfvp_plugin.so $APPDIR/usr/lib/
+          # cp path/to/your/libmdk.so.0 $APPDIR/usr/lib/
+          
+          # 3. 创建 .desktop 文件 (AppImage 必需)
+          cat > "$APPDIR/${{ env.APP_NAME }}.desktop" << EOF
+          [Desktop Entry]
+          Name=${{ env.APP_NAME }}
+          Exec=${{ env.EXECUTABLE_NAME }} # 使用上面复制的主可执行文件名称
+          Icon=${{ env.APP_NAME }}
+          Type=Application
+          Categories=Utility;
+          EOF
+          
+          # 4. 【必须修改】复制图标文件 (假设图标名为 once-power.png)
+          # cp path/to/your/once-power.png $APPDIR/usr/share/icons/hicolor/256x256/apps/${{ env.APP_NAME }}.png
+
+      # --- AppImage 打包步骤 ---
+      
+      - name: ⬇️ 下载 linuxdeploy 工具和 AppImage 插件
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+
+      - name: ⚙️ 执行 AppImage 打包 (捆绑依赖库)
+        run: |
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir "$APPDIR" \
+            --executable "$APPDIR/usr/bin/${{ env.EXECUTABLE_NAME }}" \
+            --desktop-file "$APPDIR/${{ env.APP_NAME }}.desktop" \
+            --output appimage
+            
+      - name: 📤 上传生成的 AppImage 文件到 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-AppImage
+          path: '*.AppImage' # 匹配当前目录下生成的所有 AppImage 文件
+
+      - name: 🚀 发布 AppImage 到 GitHub Release (如果使用 Tag 触发)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: '*.AppImage'
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
